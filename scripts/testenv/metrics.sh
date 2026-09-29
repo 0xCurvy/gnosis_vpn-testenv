@@ -18,8 +18,8 @@ start() {
 
     mkdir -p "${METRICS_DATA_DIR}"
 
-    otelcol --config "${REPO_DIR}/configs/otelcol.yaml" >/tmp/hopr-otelcol.log 2>&1 &
-    victoria-metrics \
+    setsid nohup otelcol --config "${REPO_DIR}/configs/otelcol.yaml" >/tmp/hopr-otelcol.log 2>&1 &
+    setsid nohup victoria-metrics \
         -storageDataPath "${METRICS_DATA_DIR}" \
         -httpListenAddr "127.0.0.1:8428" \
         >/tmp/hopr-victoriametrics.log 2>&1 &

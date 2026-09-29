@@ -18,7 +18,7 @@ status_with_extra() {
     cat <<JSON
 { "state": "running", "blokli_url": "http://localhost:8080",
   "nodes": [ { "id": "0", "address": "0xAAA", "p2p": "172.30.0.1:9000" } ],
-  "extras": [ { "keystore_path": "${keystore}", "password": "pw", "safe_address": "0xSAFE", "module_address": "0xMOD" } ] }
+  "extras": [ { "id": "0", "keystore_path": "${keystore}", "password": "pw", "safe_address": "0xSAFE", "module_address": "0xMOD" } ] }
 JSON
 }
 

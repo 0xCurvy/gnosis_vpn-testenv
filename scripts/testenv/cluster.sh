@@ -30,6 +30,9 @@ start() {
     : "${CHAIN_IMAGE:?}"
     : "${CLUSTER_SIZE:?}"
     : "${CLUSTER_LOG_LEVEL:?}"
+    : "${CLUSTER_CHANNEL_MANAGEMENT:?}"
+    : "${CLUSTER_FUNDING:?}"
+    : "${EXTRA_IDENTITIES:?}"
     local p2p="${1:?usage: cluster.sh start <p2p_host>}"
 
     require_localcluster_bin
@@ -73,23 +76,52 @@ start() {
         load_curvy_env
     fi
 
-    RUST_LOG="${CLUSTER_LOG_LEVEL}" \
+    # CLUSTER_ENV is "K=V K=V"; each word becomes an env assignment inherited by every hoprd the
+    # localcluster spawns (per-node knobs, catalogue T25-knob-ab).
+    local env_args=()
+    # shellcheck disable=SC2086  # intentional word-splitting of the "K=V K=V" list
+    for kv in ${CLUSTER_ENV:-}; do env_args+=("${kv}"); done
+
+    local latency_args=()
+    [ -n "${CLUSTER_LATENCY:-}" ] && latency_args=(--latency "${CLUSTER_LATENCY}")
+
+    # setsid/nohup: the cluster must outlive the shell (or systemd unit) that ran this recipe.
+    mkdir -p "${DATA_DIR}/logs"
+    setsid nohup env "${env_args[@]}" RUST_LOG="${CLUSTER_LOG_LEVEL}" \
         "${LOCALCLUSTER_BIN}" \
         --hoprd-bin "${HOPRD_BIN}" \
         --chain-image "${CHAIN_IMAGE}" \
         --size "${CLUSTER_SIZE}" \
         --p2p-host "${p2p}" \
         --data-dir "${DATA_DIR}" \
-        --extra-identities 1 \
-        "${pix_args[@]}" &
-    echo "Localcluster PID: $! (P2P on ${p2p}, PIX ${want_pix})"
+        --channel-management "${CLUSTER_CHANNEL_MANAGEMENT}" \
+        --funding-amount "${CLUSTER_FUNDING}" \
+        --extra-identities "${EXTRA_IDENTITIES}" \
+        "${pix_args[@]}" \
+        "${latency_args[@]}" >"${DATA_DIR}/logs/localcluster.log" 2>&1 &
+    echo "Localcluster PID: $! (log ${DATA_DIR}/logs/localcluster.log) (P2P on ${p2p}; PIX ${want_pix}; hoprd ${HOPRD_BIN}; env '${CLUSTER_ENV:-}'; latency '${CLUSTER_LATENCY:-}')"
 }
 
 wait_running() {
+    : "${CLUSTER_WAIT_TIMEOUT:?}"
     require_localcluster_bin
     echo "Waiting for cluster..."
+    local waited=0 cluster_state
     until [ "$(cluster_status_json | jq -r '.state // empty')" = "running" ]; do
+        cluster_state=$(cluster_status_json | jq -r '.state // "not_running"')
+        # give up on an outright failure, or on a cluster that never came up (no localcluster process after 30s)
+        if [ "${cluster_state}" = "failed" ] ||
+            { [ "${cluster_state}" = "not_running" ] && [ "${waited}" -ge 30 ] && ! pgrep -f '^[^ ]*hoprd-localcluster( |$)' >/dev/null; }; then
+            echo "Error: cluster ${cluster_state} — see ${DATA_DIR}/logs/localcluster.log" >&2
+            tail -5 "${DATA_DIR}/logs/localcluster.log" >&2 2>/dev/null || true
+            exit 1
+        fi
+        if [ "${waited}" -ge "${CLUSTER_WAIT_TIMEOUT}" ]; then
+            echo "Error: cluster not running after ${CLUSTER_WAIT_TIMEOUT}s (state ${cluster_state})" >&2
+            exit 1
+        fi
         sleep 1
+        waited=$((waited + 1))
     done
     echo "Cluster running"
 }
@@ -100,9 +132,19 @@ status() {
 }
 
 stop() {
-    pkill -f hoprd-localcluster 2>/dev/null || true
-    pkill -f "result-hoprd[^/]*/bin/hoprd" 2>/dev/null || true
+    # anchored so a caller whose own command line mentions these paths (a wrapper script, a cargo build) is not
+    # killed; the hoprd pattern also matches the pix-test out-link (result-hoprd-pix-test/bin/hoprd)
+    pkill -f '^[^ ]*hoprd-localcluster( |$)' 2>/dev/null || true
+    pkill -f '^[^ ]*result-hoprd[^/ ]*/bin/hoprd( |$)' 2>/dev/null || true
+    [ -z "${HOPRD_BIN:-}" ] || pkill -f "^${HOPRD_BIN}( |\$)" 2>/dev/null || true
     docker rm -f hopr-chain 2>/dev/null || true
+    # wait for the chain container to actually go away before returning: a following cluster-start otherwise
+    # races a still-dying Anvil and connects to a half-up chain ("chain subscription stream ended ... degraded"
+    # -> "insufficient token balance at the signer"). This is what made cluster-restart unreliable.
+    for _ in $(seq 1 30); do
+        docker container inspect hopr-chain >/dev/null 2>&1 || break
+        sleep 1
+    done
     # cluster recreates state everytime, so we can safely delete it on stop
     rm -rf "${DATA_DIR}"
     echo "Cluster stopped"

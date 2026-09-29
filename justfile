@@ -9,6 +9,23 @@ GVPN_CLIENT_DIR := env_var_or_default("GVPN_CLIENT_DIR", "../gnosis_vpn-client")
 
 # Localcluster settings
 CLUSTER_SIZE := env_var_or_default("CLUSTER_SIZE", "3")
+# Binaries the cluster runs. Defaults are the nix out-links of build-cluster; override to run a
+# stock release binary, a cargo build, or a different hoprd version per cell (regression suite T25-knob-ab/T26-version-matrix).
+# Extra environment for every cluster node, "K=V K=V" (e.g. HOPR_INTERNAL_IN_PACKET_PIPELINE_CONCURRENCY=64)
+CLUSTER_ENV := env_var_or_default("CLUSTER_ENV", "")
+# Artificial inter-node latency, passed to hoprd-localcluster --latency ("50ms", "100ms±30ms", "config:/path.yaml")
+CLUSTER_LATENCY := env_var_or_default("CLUSTER_LATENCY", "")
+# Channel management mode (api|strategy|both|none) and per-channel funding
+CLUSTER_CHANNEL_MANAGEMENT := env_var_or_default("CLUSTER_CHANNEL_MANAGEMENT", "api")
+CLUSTER_FUNDING := env_var_or_default("CLUSTER_FUNDING", "1 wxHOPR")
+# Concurrent client containers for the T22-concurrent-clients ladder. Client 1 uses extra identity 0, client N uses N-1, so the
+# cluster must be created with at least CLIENT_COUNT pre-funded identities — which is why EXTRA_IDENTITIES
+# defaults to it. Changing CLIENT_COUNT after the cluster is up needs a cluster restart to mint the identities.
+CLIENT_COUNT := env_var_or_default("CLIENT_COUNT", "1")
+# Pre-funded extra identities: one per concurrent client (index 0 is the primary client)
+EXTRA_IDENTITIES := env_var_or_default("EXTRA_IDENTITIES", CLIENT_COUNT)
+# cluster-wait gives up (exit 1) after this many seconds, or as soon as the localcluster reports 'failed' / is gone
+CLUSTER_WAIT_TIMEOUT := env_var_or_default("CLUSTER_WAIT_TIMEOUT", "900")
 DATA_DIR     := env_var_or_default("DATA_DIR",     "/tmp/hopr-nodes")
 CHAIN_IMAGE  := env_var_or_default("CHAIN_IMAGE",  "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid-anvil:latest")
 
@@ -20,7 +37,7 @@ CHAIN_IMAGE  := env_var_or_default("CHAIN_IMAGE",  "europe-west3-docker.pkg.dev/
 CLUSTER_PIX_POOL := env_var_or_default("CLUSTER_PIX_POOL", "")
 HOPRD_PACKAGE    := if CLUSTER_PIX_POOL == "curvy" { "binary-hoprd-pix-curvy-x86_64-linux" } else { "binary-hoprd-pix-test-x86_64-linux" }
 HOPRD_RESULT     := if CLUSTER_PIX_POOL == "curvy" { "result-hoprd-pix-curvy" } else { "result-hoprd" }
-CLIENT_IMAGE     := if CLUSTER_PIX_POOL == "curvy" { "gnosis_vpn-client:pix-curvy" } else { "gnosis_vpn-client" }
+CLIENT_IMAGE     := env_var_or_default("CLIENT_IMAGE", if CLUSTER_PIX_POOL == "curvy" { "gnosis_vpn-client:pix-curvy" } else { "gnosis_vpn-client" })   # env override per cell (T26-version-matrix); the pix-curvy tag under the Curvy pool
 CLIENT_BUILD     := if CLUSTER_PIX_POOL == "curvy" { "docker-build-pix-curvy" } else { "docker-build" }
 
 # The Curvy stack is published on the Docker bridge's gateway, so the host-native nodes and the
@@ -40,10 +57,41 @@ LOCALCLUSTER_BIN := env_var_or_default("LOCALCLUSTER_BIN", HOPRD_DIR + "/result-
 # Fixed subnet so the gateway IP — what the cluster binds/announces its P2P host as — is deterministic.
 DOCKER_NETWORK         := env_var_or_default("DOCKER_NETWORK",         "gnosis-vpn-testenv")
 DOCKER_NETWORK_SUBNET  := env_var_or_default("DOCKER_NETWORK_SUBNET",  "172.30.0.0/24")
+# Extra address the server holds on its WireGuard interface, so the client's periodic tunnel-liveness ping is
+# answered. Client <= 0.96.3 pings the hardcoded default 10.128.0.1 every 10 s (gnosis_vpn-lib core/runner.rs
+# tunnel_ping_loop uses ping::Options::default(), ignoring [connection.ping]) while the server image sits at
+# 10.129.0.1; three misses tear the tunnel down, so every session reconnected every ~85 s. Empty disables.
+SERVER_PING_ALIAS      := env_var_or_default("SERVER_PING_ALIAS", "10.128.0.1")
 DOCKER_NETWORK_GATEWAY := env_var_or_default("DOCKER_NETWORK_GATEWAY", "172.30.0.1")
 
 # VPN server settings
 SERVER_COUNT := env_var_or_default("SERVER_COUNT", "1")
+SERVER_IMAGE := env_var_or_default("SERVER_IMAGE", "gnosis_vpn-server")
+
+# Client image, keepalive, and per-cell knobs for the regression suite
+CLIENT_AUTOSTART  := env_var_or_default("CLIENT_AUTOSTART", "30min")
+CLIENT_EXTRA_ARGS := env_var_or_default("CLIENT_EXTRA_ARGS", "")   # appended to gnosis_vpn-root, e.g. "--allow-insecure" (T30-hopcount-ab)
+CLIENT_EXTRA_ENV  := env_var_or_default("CLIENT_EXTRA_ENV", "")    # "K=V K=V", e.g. GNOSISVPN_SURB_RAMP_SECS=0 (T25-knob-ab)
+CLIENT_SYSCTL     := env_var_or_default("CLIENT_SYSCTL", "")       # e.g. net.ipv4.tcp_congestion_control=bbr (T32-congestion-control)
+
+# Bounded container logs (soak safety)
+LOG_MAX_SIZE := env_var_or_default("LOG_MAX_SIZE", "300m")
+LOG_MAX_FILE := env_var_or_default("LOG_MAX_FILE", "3")
+
+# Also generate 0-hop destinations (node-N-h0) next to the HOPS ones — needs CLIENT_EXTRA_ARGS=--allow-insecure (T30-hopcount-ab)
+HOPS0_ALSO := env_var_or_default("HOPS0_ALSO", "0")
+
+# In-cluster traffic target and suite output.
+# The target sits on its own Docker network with a NON-private subnet: the client keeps RFC1918 ranges off the
+# tunnel, so a target on Docker's 172.17/16 bridge would be routed around the exit. 198.18.0.0/15 is the
+# RFC 2544 benchmarking range; every exit server is attached to this network and NATs into it.
+TARGET_IMAGE   := env_var_or_default("TARGET_IMAGE", "gnosis_vpn-target")
+# Tools sidecar per client (curl, ping, ip, python probes) in the client's network namespace: the client image stays vanilla
+TOOLS_IMAGE    := env_var_or_default("TOOLS_IMAGE", "gnosis_vpn-suite-tools")
+TARGET_NAME    := env_var_or_default("TARGET_NAME", "gnosis_vpn-target")
+TARGET_NETWORK := env_var_or_default("TARGET_NETWORK", "gnosis-vpn-target")
+TARGET_SUBNET  := env_var_or_default("TARGET_SUBNET", "198.18.0.0/24")
+SUITE_OUT_DIR := env_var_or_default("SUITE_OUT_DIR", "/tmp/gnosis_vpn-testenv-suite")
 
 # Override for the LAN IP auto-detection (multi-NIC hosts, or when the default route is wrong)
 LAN_IP := env_var_or_default("LAN_IP", "")
@@ -126,6 +174,14 @@ build-client-native:
 # Build all components
 build: build-cluster build-server build-client
 
+# Build the in-cluster traffic target image (sized HTTP target, UDP echo, stream server, call server)
+build-target:
+    docker build -q -t "{{TARGET_IMAGE}}" "{{justfile_directory()}}/docker/target" && echo "built {{TARGET_IMAGE}}"
+
+# Build the suite's tools sidecar image (curl, ping, iproute2, python for the probes); one sidecar runs per client
+build-tools:
+    docker build -q -t "{{TOOLS_IMAGE}}" "{{justfile_directory()}}/docker/suite-tools" && echo "built {{TOOLS_IMAGE}}"
+
 # ─── Networking ──────────────────────────────────────────────────────────────
 
 # Create the fixed-subnet Docker network joining the client container to the host-native localcluster
@@ -200,6 +256,22 @@ gen-config-on-network: gen-config
 client-start: network-create
     @scripts/testenv/client.sh start
 
+# Start a second client container on extra identity 1 (needs EXTRA_IDENTITIES=2 at cluster start)
+client2-start: network-create
+    @scripts/testenv/client.sh start gnosis_vpn-client-2 "{{CLIENT_STATE_DIR}}-2" 1
+
+# Start CLIENT_COUNT client containers: the primary plus extras 2..N on extra identities 1..N-1 (T22-concurrent-clients ladder)
+clients-start: network-create
+    @scripts/testenv/client.sh clients-start
+
+# Stop every extra client container (the primary is left alone; use client-stop for that)
+clients-stop:
+    @scripts/testenv/client.sh clients-stop
+
+# Stop the second client container
+client2-stop:
+    @scripts/testenv/client.sh stop-extra gnosis_vpn-client-2 "{{CLIENT_STATE_DIR}}-2"
+
 # Stop the client, wherever it's running (container or host-native — used by down)
 client-stop:
     @scripts/testenv/client.sh stop
@@ -257,6 +329,101 @@ e2e *ARGS: build-e2e
 # Run the e2e browser suite against a real network (rotsee etc), starting our own client
 e2e-on-network *ARGS:
     @scripts/testenv/e2e-on-network.sh {{ARGS}}
+
+# ─── Traffic target ──────────────────────────────────────────────────────────
+
+# Start the in-cluster traffic target: on the default bridge (reached through the exit) and on DOCKER_NETWORK (reached directly for baselines)
+target-start: network-create
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if docker container inspect "{{TARGET_NAME}}" > /dev/null 2>&1; then
+        echo "{{TARGET_NAME}} already exists — skipping start"
+        exit 0
+    fi
+    docker image inspect "{{TARGET_IMAGE}}" > /dev/null 2>&1 || just build-target
+    docker network inspect "{{TARGET_NETWORK}}" > /dev/null 2>&1 \
+        || docker network create --subnet "{{TARGET_SUBNET}}" "{{TARGET_NETWORK}}" > /dev/null
+    docker run --detach --rm --name "{{TARGET_NAME}}" \
+        --network "{{TARGET_NETWORK}}" \
+        --log-opt max-size={{LOG_MAX_SIZE}} --log-opt max-file={{LOG_MAX_FILE}} \
+        "{{TARGET_IMAGE}}" > /dev/null
+    docker network connect "{{DOCKER_NETWORK}}" "{{TARGET_NAME}}"
+    via=$(docker inspect "{{TARGET_NAME}}" | jq -r '.[0].NetworkSettings.Networks["{{TARGET_NETWORK}}"].IPAddress')
+    direct=$(docker inspect "{{TARGET_NAME}}" | jq -r '.[0].NetworkSettings.Networks["{{DOCKER_NETWORK}}"].IPAddress')
+    # every running exit server joins the target network and NATs tunnel clients into it
+    for i in $(seq 0 $(({{SERVER_COUNT}} - 1))); do
+        srv="gnosis_vpn-server-${i}"
+        docker container inspect "${srv}" > /dev/null 2>&1 || continue
+        docker network connect "{{TARGET_NETWORK}}" "${srv}" 2>/dev/null || true
+        docker exec "${srv}" sh -c 'iface=$(ip -o -4 addr show to {{TARGET_SUBNET}} | awk "{print \$2}" | head -1); [ -n "$iface" ] && { iptables -t nat -C POSTROUTING -s 10.129.0.0/24 -o "$iface" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.129.0.0/24 -o "$iface" -j MASQUERADE; }'
+    done
+    echo "Started {{TARGET_NAME}}: via exit ${via}  direct ${direct}  (http :8899, udp :8901 echo, :8902 stream, :8903 call)"
+
+# Stop the traffic target
+target-stop:
+    docker stop "{{TARGET_NAME}}" 2>/dev/null || true
+    docker network rm "{{TARGET_NETWORK}}" 2>/dev/null || true
+
+# ─── Regression suite (docs/regression-catalogue.md) ─────────────────────────
+
+# Environment every suite script needs, derived from the justfile variables
+_suite-env:
+    #!/usr/bin/env bash
+    cat <<ENV
+    export TESTENV_DIR="{{justfile_directory()}}" LOCALCLUSTER_BIN="{{LOCALCLUSTER_BIN}}" HOPRD_BIN="{{HOPRD_BIN}}" HOPRD_DIR="{{HOPRD_DIR}}"
+    export DATA_DIR="{{DATA_DIR}}" CONFIG_DIR="{{CONFIG_DIR}}" CLUSTER_SIZE="{{CLUSTER_SIZE}}" DOCKER_NETWORK="{{DOCKER_NETWORK}}"
+    export CLIENT_IMAGE="{{CLIENT_IMAGE}}" SERVER_IMAGE="{{SERVER_IMAGE}}" TARGET_NAME="{{TARGET_NAME}}" TARGET_NETWORK="{{TARGET_NETWORK}}" SUITE_OUT_DIR="{{SUITE_OUT_DIR}}"
+    export CLIENT_STATE_DIR="{{CLIENT_STATE_DIR}}" CLIENT_EXTRA_ARGS="{{CLIENT_EXTRA_ARGS}}" CLIENT_EXTRA_ENV="{{CLIENT_EXTRA_ENV}}" CLIENT_SYSCTL="{{CLIENT_SYSCTL}}"
+    export CLUSTER_ENV="{{CLUSTER_ENV}}" CLUSTER_LATENCY="{{CLUSTER_LATENCY}}" GVPN_CLIENT_DIR="{{GVPN_CLIENT_DIR}}" GVPN_SERVER_DIR="{{GVPN_SERVER_DIR}}"
+    ENV
+
+# Run one catalogue test against the live stack (t01 is not forced in front): just test t04 [--fast] [--knob T04_REPS=1]
+test name *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(just _suite-env)"
+    cd "{{justfile_directory()}}/tests" && exec python3 -m pytest regression --only "{{name}}" --no-preconditions {{args}}
+
+# Run the regression suite (one run, every test; --fast, --very-fast, --only, --skip, --group, --knob) against the live stack;
+# plain pytest under tests/ (conftest.py holds every option); results in SUITE_OUT_DIR/<run-id>/
+suite *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(just _suite-env)"
+    cd "{{justfile_directory()}}/tests" && exec python3 -m pytest regression {{args}}
+
+# Offline self-tests: the suite library, the target's own tests, and every probe against every target service on loopback (no stack needed)
+suite-selftest: target-test
+    python3 -m pytest "{{justfile_directory()}}/tests/selftest" -q
+
+# The traffic target's own tests (docker/target/tests), on loopback
+target-test:
+    cd "{{justfile_directory()}}/docker/target" && python3 -m pytest -q
+
+# The daily battery: build the sibling checkouts AS THEY ARE (nothing here pulls or pins upstream tags; the timer's
+# job is to check them out at the versions to test first), bring the stack up, run the suite (--fast by default; pass
+# e.g. "--very-fast" or "--run-id nightly-$(date +%F)"), take it down. Exit code is the suite's.
+nightly *args="--fast":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    just build && just up-nobuild && sleep 180 || { echo "stack failed to come up" >&2; exit 2; }
+    just suite {{args}}; rc=$?
+    just down >/dev/null 2>&1 || true
+    exit $rc
+
+# Bring the stack up without building (pre-built binaries and images), including target and client
+up-nobuild: metrics-start cluster-start cluster-wait server-start gen-config target-start clients-start
+    @just summary
+
+# Restart only the cluster (new HOPRD_BIN / CLUSTER_ENV / CLUSTER_LATENCY), regenerate config, restart the client
+cluster-restart: client-stop cluster-stop cluster-start cluster-wait gen-config client-start
+
+# Run the suite across version/config cells from a cells file (see tests/matrix.py --help)
+matrix cells *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(just _suite-env)"
+    exec python3 "{{justfile_directory()}}/tests/matrix.py" "{{cells}}" {{args}}
 
 # ─── Scripts ─────────────────────────────────────────────────────────────────
 
@@ -332,7 +499,7 @@ summary-on-network:
     @scripts/testenv/summary.sh on-network
 
 # Tear the full stack down and purge client state (cluster always restarts with new identities)
-down: client-stop server-stop cluster-stop curvy-stack-down metrics-stop
+down: client-stop clients-stop client2-stop target-stop server-stop cluster-stop curvy-stack-down metrics-stop
     @scripts/testenv/client.sh purge-state
 
 # Remove all generated configs, data, logs, chain container, and nix build results

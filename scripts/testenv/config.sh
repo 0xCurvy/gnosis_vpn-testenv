@@ -27,6 +27,13 @@ gen() {
             envsubst "\$DEST_ID,\$DEST_ADDRESS,\$DEST_HOPS" \
             <"${TEMPLATES_DIR}/destination.toml.tpl")
         destinations+="${block}"$'\n'
+        # Optional 0-hop twin (node-N-h0) for the hopcount A/B test; needs --allow-insecure on the client.
+        if [ "${HOPS0_ALSO:-0}" = "1" ]; then
+            block=$(DEST_ID="${id}-h0" DEST_ADDRESS="${address}" DEST_HOPS="0" \
+                envsubst "\$DEST_ID,\$DEST_ADDRESS,\$DEST_HOPS" \
+                <"${TEMPLATES_DIR}/destination.toml.tpl")
+            destinations+="${block}"$'\n'
+        fi
     done < <(echo "${status}" | jq -c '.nodes[]')
 
     # The PIX block has to agree with how the cluster was started, so it comes off the same switch.
@@ -45,16 +52,22 @@ gen() {
     echo "${blokli_url}" >"${CONFIG_DIR}/blokli_url"
     echo "Generated ${CONFIG_DIR}/client.toml"
 
-    # Persist the extra identity artifacts needed by client and system tests
-    local extra keystore_path
-    extra=$(echo "${status}" | jq -c '.extras[0] // empty')
-    [ -n "${extra}" ] || return 0
-    keystore_path=$(echo "${extra}" | jq -r '.keystore_path')
-    cp "${keystore_path}" "${CONFIG_DIR}/extra_id.id"
-    echo "${extra}" | jq -r '.password' >"${CONFIG_DIR}/extra_id.password"
-    echo "${extra}" | jq -r '.safe_address' >"${CONFIG_DIR}/extra_id.safe"
-    echo "${extra}" | jq -r '.module_address' >"${CONFIG_DIR}/extra_id.module"
-    echo "Saved extra identity artifacts to ${CONFIG_DIR}"
+    # Persist the extra identity artifacts needed by client and system tests.
+    # extra_id_<i>.* is every extra (extra 0 is the primary client, extra 1 the second client for
+    # T22-concurrent-clients/T19-background-load/T21-passive-observer); extra_id.* mirrors extra 0.
+    local extra keystore_path i ext
+    echo "${status}" | jq -c '.extras[]' | while IFS= read -r extra; do
+        i=$(echo "${extra}" | jq -r '.id')
+        keystore_path=$(echo "${extra}" | jq -r '.keystore_path')
+        cp "${keystore_path}" "${CONFIG_DIR}/extra_id_${i}.id"
+        echo "${extra}" | jq -r '.password' >"${CONFIG_DIR}/extra_id_${i}.password"
+        echo "${extra}" | jq -r '.safe_address' >"${CONFIG_DIR}/extra_id_${i}.safe"
+        echo "${extra}" | jq -r '.module_address' >"${CONFIG_DIR}/extra_id_${i}.module"
+        if [ "${i}" = "0" ]; then
+            for ext in id password safe module; do cp "${CONFIG_DIR}/extra_id_0.${ext}" "${CONFIG_DIR}/extra_id.${ext}"; done
+        fi
+        echo "Saved extra identity ${i} artifacts to ${CONFIG_DIR}"
+    done
 }
 
 # Rewrite the generated config to point a client on another machine at this host's LAN IP.
