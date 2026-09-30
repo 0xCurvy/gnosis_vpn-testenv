@@ -40,6 +40,12 @@ CLIENT_WORKER_USER := env_var_or_default("CLIENT_WORKER_USER", "gnosisvpntestenv
 # Client log file path (host-native client only — the container relies on `docker logs` instead)
 CLIENT_LOG_FILE := env_var_or_default("CLIENT_LOG_FILE", "/tmp/gnosis_vpn-client.log")
 
+# Curvy proving artifacts (zkeys + witness graphs) the client's PIX pool proves with, fetched
+# and digest-checked by `just zk-keys` against zk-keys.sha256. Kept across `down`/`clean`: they
+# only change with the pins. ZK_KEYS_VERSION overrides the rs-sdk release the pins name.
+ZK_KEYS_DIR     := env_var_or_default("ZK_KEYS_DIR",     "/tmp/gnosis_vpn-testenv-zk-keys")
+ZK_KEYS_VERSION := env_var_or_default("ZK_KEYS_VERSION", "")
+
 # End-to-end browser test suite (see e2e/README.md)
 E2E_IMAGE   := env_var_or_default("E2E_IMAGE",   "gnosis_vpn-e2e")
 E2E_OUT_DIR := env_var_or_default("E2E_OUT_DIR", "/tmp/gnosis_vpn-testenv-e2e")
@@ -292,8 +298,12 @@ gen-config-on-network: gen-config
 
 # ─── Client ──────────────────────────────────────────────────────────────────
 
+# Fetch and digest-check the Curvy proving artifacts the client proves with (see zk-keys.sha256)
+zk-keys:
+    ./scripts/fetch-zk-keys.sh --dir "{{ZK_KEYS_DIR}}" {{ if ZK_KEYS_VERSION != "" { "--version " + ZK_KEYS_VERSION } else { "" } }}
+
 # Start the gnosis_vpn-client container (CAP_NET_ADMIN, no sudo needed — see README)
-client-start: network-create
+client-start: network-create zk-keys
     #!/usr/bin/env bash
     set -euo pipefail
     if docker container inspect gnosis_vpn-client > /dev/null 2>&1; then
@@ -316,8 +326,10 @@ client-start: network-create
         --env GNOSISVPN_HOPR_IDENTITY_PASS="${extra_id_pass}" \
         --env GNOSISVPN_HOME=/var/lib/gnosisvpn \
         --env GNOSISVPN_CLIENT_AUTOSTART=30min \
+        --env CURVY_ZK_KEYS_DIR=/zk-keys \
         --volume "{{CONFIG_DIR}}:/config:ro" \
         --volume "{{CLIENT_STATE_DIR}}:/var/lib/gnosisvpn" \
+        --volume "{{ZK_KEYS_DIR}}:/zk-keys:ro" \
         gnosis_vpn-client
     sleep 1
     running=$(docker inspect gnosis_vpn-client 2>/dev/null | jq -r '.[0].State.Running // "false"')
@@ -343,7 +355,7 @@ client-stop:
 # client runs in its own container") if gnosis_vpn-server shares the host's egress — don't run
 # this alongside `client-start`, they'd collide over CLIENT_STATE_DIR and the default control socket.
 # Start gnosis_vpn-client as a native host process instead of in Docker (dev/debug convenience)
-client-start-on-host:
+client-start-on-host: zk-keys
     #!/usr/bin/env bash
     set -euo pipefail
     root_bin="{{GVPN_CLIENT_DIR}}/result/bin/gnosis_vpn-root"
@@ -378,6 +390,7 @@ client-start-on-host:
         GNOSISVPN_CLIENT_AUTOSTART=30min \
         GNOSISVPN_WORKER_USER="{{CLIENT_WORKER_USER}}" \
         GNOSISVPN_LOG_FILE="{{CLIENT_LOG_FILE}}" \
+        CURVY_ZK_KEYS_DIR="{{ZK_KEYS_DIR}}" \
         "${root_bin}" --worker-binary "${worker_bin}" &
     echo "Client PID: $!"
 
@@ -571,7 +584,7 @@ up-client-on-host: build-cluster build-server build-client-native metrics-start 
     @just summary-host-client
 
 # Bring up a cluster + exit server reachable from another machine on the LAN, and generate its client config
-up-on-network: build-cluster build-server metrics-start cluster-start-on-network cluster-wait server-start gen-config-on-network
+up-on-network: build-cluster build-server metrics-start cluster-start-on-network cluster-wait server-start gen-config-on-network zk-keys
     @just summary-on-network
 
 # Print how to control the running client and component versions
@@ -590,6 +603,7 @@ summary:
     just _component-version "gnosis_vpn-client" "{{GVPN_CLIENT_DIR}}"
     just _component-version "gnosis_vpn-server" "{{GVPN_SERVER_DIR}}"
     just _component-version "hoprd"             "{{HOPRD_DIR}}"
+    just _zk-keys-version
     echo ""
     echo "Metrics — OTLP HTTP: 127.0.0.1:4318 | PromQL UI: http://localhost:8428"
     echo "─────────────────────────────────────────────────────────────────"
@@ -610,6 +624,7 @@ summary-host-client:
     just _component-version "gnosis_vpn-client" "{{GVPN_CLIENT_DIR}}"
     just _component-version "gnosis_vpn-server" "{{GVPN_SERVER_DIR}}"
     just _component-version "hoprd"             "{{HOPRD_DIR}}"
+    just _zk-keys-version
     echo ""
     echo "Metrics — OTLP HTTP: 127.0.0.1:4318 | PromQL UI: http://localhost:8428"
     echo "─────────────────────────────────────────────────────────────────"
@@ -641,8 +656,12 @@ summary-on-network:
     echo "       sudo rm -f ${worker_home}/gnosis_vpn-worker"
     echo "       sudo cp ./target/release/gnosis_vpn-worker ${worker_home}/"
     echo "       sudo chown {{CLIENT_WORKER_USER}}:gnosisvpn ${worker_home}/gnosis_vpn-worker"
-    echo "  4. Run:"
+    echo "  4. Pull the Curvy proving keys the client's PIX pool proves with (fetched and"
+    echo "     digest-checked here by 'just zk-keys'):"
+    echo "       rsync -avz ${remote_user}@${lan_ip}:{{ZK_KEYS_DIR}}/ ${bundle_dir}/zk-keys/"
+    echo "  5. Run:"
     echo "       sudo RUST_LOG=info \\"
+    echo "       CURVY_ZK_KEYS_DIR=${bundle_dir}/zk-keys \\"
     echo "       ./target/release/gnosis_vpn-root \\"
     echo "         --config-path ${bundle_dir}/client-on-network.toml \\"
     echo "         --hopr-blokli-url \"${blokli_url}\" \\"
@@ -716,6 +735,17 @@ _component-version name dir:
     else
         echo "  {{name}}: ${branch} (${commit})${dirty}"
     fi
+
+# Print the rs-sdk release the proving keys are pinned to, and whether ZK_KEYS_DIR holds them all
+_zk-keys-version:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pins="{{justfile_directory()}}/zk-keys.sha256"
+    version="{{ZK_KEYS_VERSION}}"
+    [ -n "${version}" ] || version=$(sed -n 's/^# curvy-sdk \(.*\)$/\1/p' "${pins}" | head -1)
+    total=$(grep -vc '^#' "${pins}")
+    ok=$(cd "{{ZK_KEYS_DIR}}" 2>/dev/null && grep -v '^#' "${pins}" | shasum -a 256 -c 2>/dev/null | grep -c ': OK$')
+    echo "  zk keys: curvy-sdk v${version}, ${ok:-0}/${total} verified in {{ZK_KEYS_DIR}}"
 
 # Tear the full stack down and purge client state (cluster always restarts with new identities)
 down: client-stop server-stop cluster-stop metrics-stop _purge-state

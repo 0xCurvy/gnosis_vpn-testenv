@@ -48,9 +48,16 @@ sections - printable straight to PDF from a browser.
 Samples a WireGuard interface's byte counters on an interval and logs per-window
 totals to CSV. `./wg-traffic.sh --help` for options.
 
+## `fetch-zk-keys.sh`
+
+Fetches the Curvy proving keys and witness graphs pinned in `../zk-keys.sha256`
+from the rs-sdk release it names, and checks each against its SHA-256 (see the
+top-level README, "Curvy proving keys"). Usually run through `just zk-keys`.
+
 ## Tests
 
 `scripts/tests/*.bats` cover the scripts above offline: `curl`/`ping`/
 `gnosis_vpn-ctl`/`apt-get`/`sudo` fakes in `scripts/tests/fakes/` for the VPN
-scripts, and fake sysfs interfaces (`scripts/tests/helpers.bash`) for
-`wg-traffic.sh`. Run with `bats scripts/tests/` (or `just test-scripts`).
+scripts, fake sysfs interfaces (`scripts/tests/helpers.bash`) for
+`wg-traffic.sh`, and a local directory served by a fake `curl` for
+`fetch-zk-keys.sh`. Run with `bats scripts/tests/` (or `just test-scripts`).

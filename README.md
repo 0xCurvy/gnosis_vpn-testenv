@@ -167,6 +167,30 @@ how to fetch them onto a bare machine.
 | `LAN_IP`                 | auto-detected                                                             | Override for `up-on-network`'s LAN IP detection |
 | `E2E_IMAGE`              | `gnosis_vpn-e2e`                                                          | Tag for the e2e browser sidecar image           |
 | `E2E_OUT_DIR`            | `/tmp/gnosis_vpn-testenv-e2e`                                             | Parent directory for e2e run output             |
+| `ZK_KEYS_DIR`            | `/tmp/gnosis_vpn-testenv-zk-keys`                                         | Curvy proving keys + witness graphs (see below) |
+| `ZK_KEYS_VERSION`        | the release `zk-keys.sha256` names                                        | Fetch the keys from another rs-sdk release      |
+
+## Curvy proving keys
+
+The client's PIX deposit pool settles through the Curvy privacy pool and proves
+every allocation, commitment and withdrawal in-process, so it needs the Curvy
+proving artifacts: five zkeys and their five SIGNET witness graphs. `just zk-keys`
+fetches them from the [rs-sdk](https://github.com/0xCurvy/rs-sdk) GitHub release
+named in `zk-keys.sha256` into `ZK_KEYS_DIR`, and checks every file against the
+SHA-256 pinned there; a download that does not match is discarded. Verified files
+are kept, so later runs download nothing, and `down`/`clean` leave them alone.
+
+`client-start` and `client-start-on-host` depend on `zk-keys`. The container gets
+the directory read-only at `/zk-keys` with `CURVY_ZK_KEYS_DIR=/zk-keys`; the
+host-native client gets `CURVY_ZK_KEYS_DIR=$ZK_KEYS_DIR`. `just summary` prints the
+release the keys are pinned to and how many are verified.
+
+The keys are the Gnosis trusted-setup ceremony output, which is what the Gnosis
+PIX aggregator's verifiers check. The pins must match the `curvy-sdk` the client
+is built with: when `gnosis_vpn-client` moves to a new `curvy-sdk`, regenerate
+`zk-keys.sha256` from that release's `curvy-witnesscalc/src/lib.rs` (and bump its
+`# curvy-sdk` header). A mismatch fails at the first deposit, when the SDK refuses
+a file whose digest it does not pin.
 
 ## Client state directory
 

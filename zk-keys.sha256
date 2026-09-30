@@ -1,0 +1,14 @@
+# curvy-sdk 0.1.0-rc.9
+# Proving artifacts the client's Curvy PIX pool loads through CURVY_ZK_KEYS_DIR, pinned to
+# the rs-sdk release above. Generated from rs-sdk's curvy-witnesscalc/src/lib.rs (the source
+# of truth for names and digests); regenerate when bumping curvy-sdk in gnosis_vpn-client.
+a241bb706a69de18a6c95d6b83fc06012adc2a0e3cb7ac8688fe0fdce603f564  verifySingleWithdrawal_2_30-final.zkey
+c4a15849fa57c19dd4fd43a63e60a4c902a6847310e95137b69aa895307182e6  verifySingleAggregation_2_3_30-final.zkey
+7611d3ade361c02b70b27620aca12aa8c15f7c7aba352d3e7add6409974fb13d  verifyPixAggregation_2_9_30-final.zkey
+869080de2e351bd383e9f8f1ec84457bb6d0bf635c3f6163acf3186a982ab1ba  verifyPixMultiOwnerWithdrawal_10_30-final.zkey
+5a9761127ad5d0a34c3f0b9bb11d34d13d6d68afb0089c3b74d24bcb25fa7477  verifyPendingNotesCommitment_5_30-final.zkey
+04b2fa84394548a971c757c61280b81fb7699a367eeb45834201675f8a0aad74  withdrawal-2-30.signet.zst
+8c6eb16f41cc147fca8809804c0f0743d463aeba2ee45a02e7b32b6a27904386  aggregation-2-3-30.signet.zst
+b974028ba40afdc067524819d61bdd9172a5e56369cfc05a75ba5d469c379c3a  pix-aggregation-2-9-30.signet.zst
+90d301a189ceea1a7574f410bd94e53e9da0da0e75d8bfb99d47c42295fdfa56  pix-withdrawal-10-30.signet.zst
+69fa449825732a0958ccd0689ad361d9e8df1223231d8b71932d0efc4a07d8f0  pending-5-30.signet.zst
