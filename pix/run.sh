@@ -235,10 +235,12 @@ echo "-- waiting for destinations"
 ready_destination() {
     local id
     # `route_health.state` is internally tagged, so the variant name is a `state` field rather than
-    # the object's only key.
+    # the object's only key. Clients up to 0.101 report `ReadyToConnect` once a health check has
+    # passed; from the path-planner rework on, `Routable` (a plannable path exists) is the state a
+    # connect proceeds from, and the probe results sit beside it.
     id=$(ctl_json status | jq -r '
         .Status.destinations[]
-        | select(.route_health.state.state == "ReadyToConnect")
+        | select(.route_health.state.state == "ReadyToConnect" or .route_health.state.state == "Routable")
         | .destination.id' | head -1)
     [ -n "$id" ] && {
         READY_ID="$id"
