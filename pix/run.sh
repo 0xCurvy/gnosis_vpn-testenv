@@ -23,7 +23,8 @@
 # the money moves differently: the client's Safe pays once, shielding a float into the Curvy vault
 # that every deposit is then allocated out of, and the vault pays the exit less its withdrawal fee.
 # So the exit's income is asserted net of that fee, and the client's Safe is reported, not asserted.
-# The pool is read off the client image `up-curvy` starts; CLUSTER_PIX_POOL overrides it.
+# The pool is read off the Curvy stack `up-curvy` leaves behind ($CONFIG_DIR/curvy-stack.env);
+# CLUSTER_PIX_POOL overrides it.
 #
 # Requires jq, curl, bc and docker. Budget ~5 minutes after the stack is up.
 
@@ -182,12 +183,12 @@ fi
 
 # Which deposit pool this stack settles through: `up-curvy` starts the client from its `pix-curvy`
 # image, and the node binary it pairs with is chosen by the same switch.
+# `curvy-stack-up` writes the stack's environment there and `curvy-stack-down` removes it, so its
+# presence is the cluster's pool. (The client image carries no pool in its tag any more: since
+# gnosis_vpn-client#839 it is one build, on edgli's default `pix-curvy`.)
 POOL="${CLUSTER_PIX_POOL:-}"
 if [ -z "$POOL" ]; then
-    case "$(docker inspect "$CLIENT_CONTAINER" 2>/dev/null | jq -r '.[0].Config.Image // empty')" in
-    *:pix-curvy) POOL="curvy" ;;
-    *) POOL="test" ;;
-    esac
+    if [ -f "${CONFIG_DIR}/curvy-stack.env" ]; then POOL="curvy"; else POOL="test"; fi
 fi
 case "$POOL" in
 test) SETTLE_TIMEOUT="${SETTLE_TIMEOUT:-180}" ;;

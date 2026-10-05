@@ -215,14 +215,15 @@ PIX income. The exactness is carried instead by the integer PIX counters and by
 
 ```sh
 just up-curvy          # up-pix, but settling through a local Curvy deployment
-just system-test-pix   # the same test; it reads the pool off the client image
+just system-test-pix   # the same test; it reads the pool off the Curvy stack's env file
 just down              # also removes the Curvy stack
 ```
 
-`CLUSTER_PIX_POOL=curvy` (set by `up-curvy`) swaps both ends to the anonymous
-Baby JubJub pool: hoprd's `binary-hoprd-pix-curvy`, and the client's
-`docker-build-pix-curvy` image. The two have to change together, for the same
-curve reason as above.
+`CLUSTER_PIX_POOL=curvy` (set by `up-curvy`) swaps the cluster to the anonymous
+Baby JubJub pool, hoprd's `binary-hoprd-pix-curvy`. The client has no switch:
+since gnosis_vpn-client#839 it is one image, built against edgli's default
+pool, `pix-curvy`, so this is the only cluster it pairs with (for the curve
+reason above; `up-pix` keeps working only with a client older than that).
 
 The Curvy deployment — chain with Blokli, relayer, indexer, batch prover and
 gateway, pinned by hoprd's `localcluster/curvy/release.json` — comes up first,
