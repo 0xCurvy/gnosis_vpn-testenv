@@ -187,9 +187,10 @@ Both ends have to agree or nothing settles, which is why one switch
 and which PIX block `gen-config` emits:
 
 - **dimensions.** The per-SSA quota is
-  `num_ssa_parts × (ssa_part_size + additional_shares) × 1038`, and hopr-lib's
-  defaults put it at ~649 MiB — one cycle would need that much downstream
-  traffic. The cluster's demo geometry is `8 × (2+2) × 1038` = 33 216 B and
+  `num_ssa_parts × (ssa_part_size + additional_shares) × 3246` (3246 B being
+  hopr-lib's packet payload since 5.0.0-rc.5; 1038 before), and hopr-lib's
+  defaults put it at ~1.98 GiB — one cycle would need that much downstream
+  traffic. The cluster's demo geometry is `8 × (2+2) × 3246` = 103 872 B and
   completes in seconds. Its exit also accepts only quotas in `0 … 1 MiB`, so a
   mismatched client is refused outright with `UnacceptablePixParams`. Matching
   it needs `[connection.pix.dimensions]`, which is why this test requires a
@@ -583,7 +584,7 @@ your host firewall.
 - PIX _settles_ only if the exit also runs the `Pix` strategy, which is opt-in
   and not part of hoprd's default strategy set.
   `hoprd-localcluster --enable-pix` adds it, and its demo geometry caps the
-  accepted per-SSA quota at 1 MiB — well under hopr-lib's default ≈649 MiB, so
+  accepted per-SSA quota at 1 MiB — well under hopr-lib's default ≈1.98 GiB, so
   the client has to be sized down to match. `up-pix` does both halves:
   `--enable-pix` on the cluster and `templates/pix-on.toml.tpl` on the client
   (see "PIX" above). Plain `up` passes neither, so its exits accept PIX sessions
